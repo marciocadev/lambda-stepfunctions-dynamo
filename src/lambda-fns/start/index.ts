@@ -14,6 +14,7 @@ export const handler = async(event:any) => {
     map: event.map,
     strLst: event.strLst,  
     numLst: event.numLst,
+    mapLst: event.mapLst,
   };
   const input:StartExecutionCommandInput = {
     stateMachineArn: process.env.SM,
