@@ -1,7 +1,7 @@
 import { App, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { AttributeType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
-import { Chain, JsonPath, Map, Pass, StateMachine, TaskInput } from 'aws-cdk-lib/aws-stepfunctions';
+import { Chain, JsonPath, Map, Parallel, Pass, StateMachine, TaskInput } from 'aws-cdk-lib/aws-stepfunctions';
 import { DynamoAttributeValue, DynamoPutItem, DynamoUpdateItem, LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 import { join } from 'path';
@@ -34,14 +34,14 @@ export class MyStack extends Stack {
     const putItem = new DynamoPutItem(this, 'DynamoPutItem', {
       item: {
         pk: DynamoAttributeValue.fromString(JsonPath.stringAt('$.pk')),
-        // str: DynamoAttributeValue.fromString(JsonPath.stringAt('$.str')),
-        // num: DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.num)')),
-        // map: DynamoAttributeValue.fromMap({
-        //   'strMap': DynamoAttributeValue.fromString(JsonPath.stringAt('$.map.strMap')),
-        //   'numMap': DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.map.numMap)')),
-        // }),
-        // strLst: DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.strLst')),
-        // strSet: DynamoAttributeValue.fromStringSet(JsonPath.listAt('$.strLst')),
+        str: DynamoAttributeValue.fromString(JsonPath.stringAt('$.str')),
+        num: DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.num)')),
+        map: DynamoAttributeValue.fromMap({
+          'strMap': DynamoAttributeValue.fromString(JsonPath.stringAt('$.map.strMap')),
+          'numMap': DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.map.numMap)')),
+        }),
+        strLst: DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.strLst')),
+        strSet: DynamoAttributeValue.fromStringSet(JsonPath.listAt('$.strLst')),
         // num2: DynamoAttributeValue.fromNumber(JsonPath.numberAt('$.num')),
         // numSet: DynamoAttributeValue.numberSetFromStrings(Array.from(JsonPath.listAt('$.numLst'), x => `${x}` )),
         // numLst: DynamoAttributeValue.fromStringSet(JsonPath.listAt('States.JsonToString($.numLst)')),
@@ -65,10 +65,23 @@ export class MyStack extends Stack {
     const mapNumLst = new Map(this, 'MapNumLst', {
       inputPath: '$.numLst',
       maxConcurrency: 0,
-      resultPath: '$.numLst',
+      resultPath: '$.numLstProcess',
     });
     const transformNumLstChain = Chain.start(transformNumLstStep);
     mapNumLst.iterator(transformNumLstChain);
+    const updateItemNumLst = new DynamoUpdateItem(this, 'DynamoUpdateItemNumLst', {
+      key: { pk: DynamoAttributeValue.fromString(JsonPath.stringAt('$.pk')) },
+      updateExpression: 'set #numLst=:numLst',
+      expressionAttributeNames: {
+        '#numLst': 'numLst',
+      },
+      expressionAttributeValues: {
+        ':numLst': DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.numLstProcess')),
+      },
+      table: dynamo,
+      resultPath: JsonPath.DISCARD,
+    });
+    mapNumLst.next(updateItemNumLst);
 
     const transformMapLst = new NodejsFunction(this, 'TransformMapLst', {
       functionName: 'TransformMapLst',
@@ -86,48 +99,31 @@ export class MyStack extends Stack {
       inputPath: '$',
       itemsPath: '$.mapLst',
       maxConcurrency: 0,
-      resultPath: '$.mapLst',
+      resultPath: '$.mapLstProcess',
     });
     const transformMapLstChain = Chain.start(transformMapLstStep);
     mapMapLst.iterator(transformMapLstChain);
-
-    const setUpdate = 'set #str=:str, #num=:num, #map=:map, #strLst=:strLst, #strSet=:strSet, #numSet=:numSet'; // #numLst=:numLst,;
-    const updateItem = new DynamoUpdateItem(this, 'DynamoUpdateItem', {
+    const updateItemMapLst = new DynamoUpdateItem(this, 'DynamoUpdateItem', {
       key: { pk: DynamoAttributeValue.fromString(JsonPath.stringAt('$.pk')) },
-      updateExpression: setUpdate,
+      updateExpression: 'set #mapLst=:mapLst',
       expressionAttributeNames: {
-        '#str': 'str',
-        '#num': 'num',
-        '#map': 'map',
-        '#strLst': 'strLst',
-        '#strSet': 'strSet',
-        // '#numLst': 'numLst',
-        '#numSet': 'numSet',
+        '#mapLst': 'mapLst',
       },
       expressionAttributeValues: {
-        ':str': DynamoAttributeValue.fromString(JsonPath.stringAt('$.str')),
-        ':num': DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.num)')),
-        ':map': DynamoAttributeValue.fromMap({
-          'strMap': DynamoAttributeValue.fromString(JsonPath.stringAt('$.map.strMap')),
-          'numMap': DynamoAttributeValue.numberFromString(JsonPath.stringAt('States.JsonToString($.map.numMap)')),
-        }),
-        ':strLst': DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.strLst')),
-        ':strSet': DynamoAttributeValue.fromStringSet(JsonPath.listAt('$.strLst')),
-        // ':numLst': DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.numLst')),
-        ':numSet': DynamoAttributeValue.numberSetFromStrings(JsonPath.listAt('$.numLst')),
+        ':mapLst': DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.mapLstProcess')),
       },
       table: dynamo,
       resultPath: JsonPath.DISCARD,
     });
+    mapMapLst.next(updateItemMapLst);
 
-    const lastPass = new Pass(this, 'LastPass');
+    const parallel = new Parallel(this, 'Parallel')
+      .branch(mapMapLst)
+      .branch(mapNumLst);
 
     const chain = Chain.start(pass)
       .next(putItem)
-      .next(mapNumLst)
-      .next(mapMapLst)
-      .next(updateItem)
-      .next(lastPass);
+      .next(parallel);
     const sm = new StateMachine(this, 'StateMachine', {
       stateMachineName: 'LambdaStepfunctionsDynamo',
       definition: chain,
