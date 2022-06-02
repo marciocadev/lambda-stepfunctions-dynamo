@@ -2,7 +2,7 @@ import { App, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { AttributeType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Chain, JsonPath, Map, Parallel, Pass, StateMachine, TaskInput } from 'aws-cdk-lib/aws-stepfunctions';
-import { DynamoAttributeValue, DynamoPutItem, DynamoUpdateItem, LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import { DynamoAttributeValue, DynamoGetItem, DynamoPutItem, DynamoUpdateItem, LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 import { join } from 'path';
 
@@ -28,6 +28,8 @@ export class MyStack extends Stack {
         'strLst.$': '$.strLst',
         'numLst.$': '$.numLst',
         'mapLst.$': '$.mapLst',
+        'bool.$': '$.bool',
+        'binary.$': '$.convertToBinary',
       },
     });
 
@@ -42,9 +44,8 @@ export class MyStack extends Stack {
         }),
         strLst: DynamoAttributeValue.listFromJsonPath(JsonPath.stringAt('$.strLst')),
         strSet: DynamoAttributeValue.fromStringSet(JsonPath.listAt('$.strLst')),
-        // num2: DynamoAttributeValue.fromNumber(JsonPath.numberAt('$.num')),
-        // numSet: DynamoAttributeValue.numberSetFromStrings(Array.from(JsonPath.listAt('$.numLst'), x => `${x}` )),
-        // numLst: DynamoAttributeValue.fromStringSet(JsonPath.listAt('States.JsonToString($.numLst)')),
+        bool: DynamoAttributeValue.booleanFromJsonPath(JsonPath.stringAt('$.bool')),
+        binary: DynamoAttributeValue.fromBinary(JsonPath.stringAt('$.binary')),
       },
       table: dynamo,
       resultPath: JsonPath.DISCARD,
@@ -103,7 +104,7 @@ export class MyStack extends Stack {
     });
     const transformMapLstChain = Chain.start(transformMapLstStep);
     mapMapLst.iterator(transformMapLstChain);
-    const updateItemMapLst = new DynamoUpdateItem(this, 'DynamoUpdateItem', {
+    const updateItemMapLst = new DynamoUpdateItem(this, 'DynamoUpdateItemMapLst', {
       key: { pk: DynamoAttributeValue.fromString(JsonPath.stringAt('$.pk')) },
       updateExpression: 'set #mapLst=:mapLst',
       expressionAttributeNames: {
@@ -117,13 +118,21 @@ export class MyStack extends Stack {
     });
     mapMapLst.next(updateItemMapLst);
 
-    const parallel = new Parallel(this, 'Parallel')
-      .branch(mapMapLst)
-      .branch(mapNumLst);
+    const parallel = new Parallel(this, 'Parallel', {
+      resultPath: JsonPath.DISCARD,
+    });
+    parallel.branch(mapMapLst).branch(mapNumLst);
+
+    const getItem = new DynamoGetItem(this, 'DynamoGetItem', {
+      key: { pk: DynamoAttributeValue.fromString(JsonPath.stringAt('$.pk')) },
+      table: dynamo,
+      outputPath: '$',
+    });
 
     const chain = Chain.start(pass)
       .next(putItem)
-      .next(parallel);
+      .next(parallel)
+      .next(getItem);
     const sm = new StateMachine(this, 'StateMachine', {
       stateMachineName: 'LambdaStepfunctionsDynamo',
       definition: chain,

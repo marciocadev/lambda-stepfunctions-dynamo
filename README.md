@@ -23,7 +23,9 @@ https://github.com/json-path/JsonPath
   "mapLst": [
     { "str": "str1", "num": 1 },
     { "str": "str2", "num": 2 }
-  ]
+  ],
+  "bool": true,
+  "convertToBinary": "Converte para binario"
 }
 ```
 
