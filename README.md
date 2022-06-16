@@ -1,4 +1,6 @@
 # replace this
+cdk deploy --notification-arns arn:aws:sns:us-east-1:549672552044:cdk-deploying-stacks
+
 
 https://goessner.net/articles/JsonPath/index.html#e3
 
